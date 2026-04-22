@@ -2,62 +2,74 @@ const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
 const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const QUEUE_KEY = "saweria:queue";
 
-async function redisCommand(command, ...args) {
-    const url = `${UPSTASH_URL}/${command}/${args.map(encodeURIComponent).join("/")}`;
-    const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
+async function redisGet(path) {
+    const res = await fetch(`${UPSTASH_URL}${path}`, {
+        headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
     });
-    const data = await response.json();
-    return data.result;
+    return (await res.json()).result;
+}
+
+async function redisPost(path, body) {
+    const res = await fetch(`${UPSTASH_URL}${path}`, {
+        method: "POST",
+        headers: { 
+            Authorization: `Bearer ${UPSTASH_TOKEN}`,
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(body)
+    });
+    return (await res.json()).result;
 }
 
 export default async function handler(req, res) {
     res.setHeader("Access-Control-Allow-Origin", "*");
 
-    if (!UPSTASH_URL || !UPSTASH_TOKEN) {
-        return res.status(500).json({ status: "error", message: "Redis belum dikonfigurasi." });
-    }
-
     const id = req.query.id;
-    if (!id) {
-        return res.status(400).json({ status: "error", message: "Parameter ?id= diperlukan" });
-    }
+    if (!id) return res.status(400).json({ status: "error", message: "Parameter ?id= diperlukan" });
 
     try {
-        // Ambil SEMUA item di queue
-        const items = await redisCommand("lrange", QUEUE_KEY, "0", "-1");
+        // Ambil semua item
+        const items = await redisGet(`/lrange/${QUEUE_KEY}/0/-1`);
 
         if (!items || items.length === 0) {
-            return res.status(200).json({ status: "ok", message: "Queue sudah kosong" });
+            return res.status(200).json({ status: "ok", message: "Queue kosong" });
         }
 
-        // Cari item yang ID-nya cocok
-        let targetRaw = null;
+        // Filter: buang item yang ID-nya cocok
+        const remaining = [];
+        let deleted = false;
+
         for (const raw of items) {
             try {
-                const donation = typeof raw === "string" ? JSON.parse(raw) : raw;
-                if (donation.id === id) {
-                    targetRaw = typeof raw === "string" ? raw : JSON.stringify(raw);
-                    break;
+                const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
+                if (obj.id === id) {
+                    deleted = true;
+                    console.log("🗑️ Hapus:", id);
+                } else {
+                    remaining.push(typeof raw === "string" ? raw : JSON.stringify(raw));
                 }
-            } catch (e) {
-                continue;
+            } catch {
+                remaining.push(raw);
             }
         }
 
-        if (!targetRaw) {
-            console.log("⚠️ ID tidak ditemukan di queue:", id);
-            return res.status(200).json({ status: "ok", message: "ID tidak ditemukan di queue" });
+        // Hapus seluruh queue
+        await redisGet(`/del/${QUEUE_KEY}`);
+
+        // Re-insert sisa item (kalau ada)
+        if (remaining.length > 0) {
+            await redisPost(`/rpush/${QUEUE_KEY}`, remaining);
         }
 
-        // Hapus item dari queue berdasarkan value
-        await redisCommand("lrem", QUEUE_KEY, "0", targetRaw);
-        console.log("✅ Donasi dihapus dari queue:", id);
-
-        return res.status(200).json({ status: "ok", message: "Donasi " + id + " selesai diproses" });
+        return res.status(200).json({ 
+            status: "ok", 
+            deleted,
+            remaining: remaining.length,
+            message: deleted ? `Donasi ${id} dihapus` : `ID ${id} tidak ditemukan`
+        });
 
     } catch (err) {
-        console.error("Redis error:", err);
+        console.error("Error:", err);
         return res.status(500).json({ status: "error", message: err.message });
     }
 }
