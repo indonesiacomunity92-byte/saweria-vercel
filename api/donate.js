@@ -2,15 +2,6 @@ const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
 const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const QUEUE_KEY = "saweria:queue";
 
-async function redisCommand(command, ...args) {
-    const url = `${UPSTASH_URL}/${command}/${args.map(encodeURIComponent).join("/")}`;
-    const response = await fetch(url, {
-        headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
-    });
-    const data = await response.json();
-    return data.result;
-}
-
 export default async function handler(req, res) {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
@@ -31,12 +22,18 @@ export default async function handler(req, res) {
                 timestamp: Date.now(),
             };
 
-        await redisCommand("rpush", QUEUE_KEY, JSON.stringify(donationData));
+            // ✅ Simpan sebagai string JSON bersih (single encode)
+            const jsonStr = JSON.stringify(donationData);
+            const pushUrl = `${UPSTASH_URL}/rpush/${encodeURIComponent(QUEUE_KEY)}/${encodeURIComponent(jsonStr)}`;
+            await fetch(pushUrl, {
+                headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
+            });
 
-
-            console.log("✅ Donasi disimpan ke Redis:", donationData.donator_name);
+            console.log("✅ Donasi disimpan:", donationData.donator_name);
             return res.status(200).json({ status: "ok", id: donationData.id });
+
         } catch (err) {
+            console.error("Error:", err);
             return res.status(400).json({ status: "error", message: err.message });
         }
     }
