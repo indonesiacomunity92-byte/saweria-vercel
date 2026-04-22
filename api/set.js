@@ -1,75 +1,45 @@
-const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
-const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
-const QUEUE_KEY = "saweria:queue";
-
-async function redisGet(path) {
-    const res = await fetch(`${UPSTASH_URL}${path}`, {
-        headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` }
-    });
-    return (await res.json()).result;
-}
-
-async function redisPost(path, body) {
-    const res = await fetch(`${UPSTASH_URL}${path}`, {
-        method: "POST",
-        headers: { 
-            Authorization: `Bearer ${UPSTASH_TOKEN}`,
-            "Content-Type": "application/json"
-        },
-        body: JSON.stringify(body)
-    });
-    return (await res.json()).result;
-}
-
 export default async function handler(req, res) {
     res.setHeader("Access-Control-Allow-Origin", "*");
 
-    const id = req.query.id;
-    if (!id) return res.status(400).json({ status: "error", message: "Parameter ?id= diperlukan" });
+    if (!UPSTASH_URL || !UPSTASH_TOKEN) {
+        return res.status(500).json({ status: "error", message: "Redis belum dikonfigurasi." });
+    }
 
     try {
-        // Ambil semua item
-        const items = await redisGet(`/lrange/${QUEUE_KEY}/0/-1`);
+        const raw = await redisCommand("lindex", QUEUE_KEY, "0");
 
-        if (!items || items.length === 0) {
-            return res.status(200).json({ status: "ok", message: "Queue kosong" });
+        // ✅ Handle semua kemungkinan kosong
+        if (!raw || raw === null || raw === "" || raw === "null") {
+            return res.status(200).json({ status: "empty" });
         }
 
-        // Filter: buang item yang ID-nya cocok
-        const remaining = [];
-        let deleted = false;
-
-        for (const raw of items) {
+        let donation;
+        if (typeof raw === "string") {
             try {
-                const obj = typeof raw === "string" ? JSON.parse(raw) : raw;
-                if (obj.id === id) {
-                    deleted = true;
-                    console.log("🗑️ Hapus:", id);
-                } else {
-                    remaining.push(typeof raw === "string" ? raw : JSON.stringify(raw));
-                }
+                donation = JSON.parse(raw);
             } catch {
-                remaining.push(raw);
+                // String tapi bukan JSON valid, hapus dan return empty
+                await redisCommand("lpop", QUEUE_KEY);
+                return res.status(200).json({ status: "empty" });
             }
+        } else {
+            donation = raw;
         }
 
-        // Hapus seluruh queue
-        await redisGet(`/del/${QUEUE_KEY}`);
-
-        // Re-insert sisa item (kalau ada)
-        if (remaining.length > 0) {
-            await redisPost(`/rpush/${QUEUE_KEY}`, remaining);
+        // ✅ Validasi donation punya id
+        if (!donation || !donation.id) {
+            // Data rusak, hapus dari queue
+            await redisCommand("lpop", QUEUE_KEY);
+            return res.status(200).json({ status: "empty" });
         }
 
-        return res.status(200).json({ 
-            status: "ok", 
-            deleted,
-            remaining: remaining.length,
-            message: deleted ? `Donasi ${id} dihapus` : `ID ${id} tidak ditemukan`
+        return res.status(200).json({
+            status: "ok",
+            data: donation
         });
 
     } catch (err) {
-        console.error("Error:", err);
+        console.error("Redis error:", err);
         return res.status(500).json({ status: "error", message: err.message });
     }
 }
