@@ -7,7 +7,7 @@ const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const QUEUE_KEY = "saweria:queue";
 
 async function redisCommand(command, ...args) {
-    const response = await fetch(`${UPSTASH_URL}/${command}/${args.join("/")}`, {
+    const response = await fetch(`${UPSTASH_URL}/${command}/${args.map(encodeURIComponent).join("/")}`, {
         headers: {
             Authorization: `Bearer ${UPSTASH_TOKEN}`,
         },
