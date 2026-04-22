@@ -8,18 +8,31 @@ async function upstash(command, ...args) {
     return (await r.json()).result;
 }
 
-async function upstashPush(values) {
-    // Push multiple values via pipeline
-    const body = values.map(v => ["rpush", QUEUE_KEY, v]);
+async function upstashPipeline(commands) {
     const r = await fetch(`${UPSTASH_URL}/pipeline`, {
         method: "POST",
         headers: {
             Authorization: `Bearer ${UPSTASH_TOKEN}`,
             "Content-Type": "application/json"
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(commands)
     });
     return r.json();
+}
+
+function parseItem(raw) {
+    let obj = raw;
+    // Parse sampai 3 level (handle triple-encoded)
+    for (let i = 0; i < 3; i++) {
+        if (typeof obj === "string") {
+            try { obj = JSON.parse(obj); } catch { break; }
+        } else if (Array.isArray(obj)) {
+            obj = obj[0];
+        } else {
+            break;
+        }
+    }
+    return obj;
 }
 
 export default async function handler(req, res) {
@@ -29,22 +42,20 @@ export default async function handler(req, res) {
     if (!id) return res.status(400).json({ status: "error", message: "id diperlukan" });
 
     try {
-        // Ambil semua item
         const items = await upstash("lrange", QUEUE_KEY, "0", "-1");
+
         if (!items || items.length === 0) {
             return res.status(200).json({ status: "ok", message: "Queue kosong" });
         }
 
-        // Filter item yang bukan target
         const remaining = [];
         let deleted = false;
 
         for (const raw of items) {
             try {
-                let obj = typeof raw === "string" ? JSON.parse(raw) : raw;
-                if (typeof obj === "string") obj = JSON.parse(obj); // double encoded
+                const obj = parseItem(raw);
 
-                if (obj.id === id) {
+                if (obj && obj.id === id) {
                     deleted = true;
                     console.log("🗑️ Hapus:", id);
                 } else {
@@ -58,12 +69,18 @@ export default async function handler(req, res) {
         // Hapus seluruh queue
         await upstash("del", QUEUE_KEY);
 
-        // Re-insert sisa (kalau ada)
+        // Re-insert sisa kalau ada
         if (remaining.length > 0) {
-            await upstashPush(remaining);
+            const commands = remaining.map(v => ["rpush", QUEUE_KEY, v]);
+            await upstashPipeline(commands);
         }
 
-        return res.status(200).json({ status: "ok", deleted, remaining: remaining.length });
+        return res.status(200).json({ 
+            status: "ok", 
+            deleted, 
+            remaining: remaining.length,
+            message: deleted ? `Donasi ${id} dihapus` : `ID ${id} tidak ditemukan`
+        });
 
     } catch (err) {
         console.error(err);
