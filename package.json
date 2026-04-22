@@ -1,0 +1,9 @@
+{
+  "name": "saweria-roblox-relay",
+  "version": "1.0.0",
+  "description": "Relay webhook Saweria ke Roblox tanpa hosting berbayar",
+  "private": true,
+  "engines": {
+    "node": "18.x"
+  }
+}
