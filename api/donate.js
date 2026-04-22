@@ -31,8 +31,16 @@ export default async function handler(req, res) {
                 timestamp: Date.now(),
             };
 
-            // ✅ Simpan ke Redis queue
-            await redisCommand("rpush", QUEUE_KEY, JSON.stringify(donationData));
+// ✅ FIX — simpan langsung sebagai object, biarkan Upstash yang handle
+const url = `${UPSTASH_URL}/rpush/${QUEUE_KEY}`;
+await fetch(url, {
+    method: "POST",
+    headers: {
+        Authorization: `Bearer ${UPSTASH_TOKEN}`,
+        "Content-Type": "application/json"
+    },
+    body: JSON.stringify(donationData)  // Upstash akan simpan sebagai JSON langsung
+});
 
             console.log("✅ Donasi disimpan ke Redis:", donationData.donator_name);
             return res.status(200).json({ status: "ok", id: donationData.id });
